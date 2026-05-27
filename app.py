@@ -282,8 +282,13 @@ def load_category(path: str, category: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_benchmark(path: str) -> pd.Series:
-    """Load pre-parsed Nifty 500 parquet."""
-    return pd.read_parquet(path)["Close"]
+    """Load pre-parsed Nifty 500 parquet. Robust to column naming differences."""
+    df = pd.read_parquet(path)
+    # Pick the right column whether it's named 'Close', '2', or just the first numeric col
+    if "Close" in df.columns:
+        return df["Close"]
+    # Fallback: take the first (and usually only) column
+    return df.iloc[:, 0].rename("Close")
 
 
 @st.cache_data(show_spinner=False)
