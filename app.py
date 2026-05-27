@@ -274,8 +274,21 @@ AMFI_FILE      = "AMFI.parquet"
 # =============================================================================
 @st.cache_data(show_spinner=False)
 def load_category(path: str, category: str) -> pd.DataFrame:
-    """Load a pre-parsed NAV parquet file."""
+    """Load a pre-parsed NAV parquet file. Validates structure."""
     data = pd.read_parquet(path)
+
+    # Validation — bad parquet files (raw Excel-converted, no parsing) won't have
+    # a datetime index and will silently break the app later
+    if not isinstance(data.index, pd.DatetimeIndex):
+        st.error(
+            f"❌ Bad parquet file: `{Path(path).name}`\n\n"
+            f"It doesn't have a Date index. It was probably created by a raw "
+            f"`pd.read_excel().to_parquet()` instead of by `convert_to_parquet.py`.\n\n"
+            f"**Fix:** Run `convert_to_parquet.py` locally on your `.xlsx` files "
+            f"and replace this parquet file in your repo with the new one."
+        )
+        st.stop()
+
     data.columns = pd.MultiIndex.from_product([[category], data.columns])
     return data
 
@@ -284,6 +297,13 @@ def load_category(path: str, category: str) -> pd.DataFrame:
 def load_benchmark(path: str) -> pd.Series:
     """Load pre-parsed Nifty 500 parquet. Robust to column naming differences."""
     df = pd.read_parquet(path)
+    if not isinstance(df.index, pd.DatetimeIndex):
+        st.error(
+            f"❌ Bad parquet file: `{Path(path).name}`\n\n"
+            f"It doesn't have a Date index. Run `convert_to_parquet.py` locally "
+            f"to regenerate it from the .xlsx file."
+        )
+        st.stop()
     # Pick the right column whether it's named 'Close', '2', or just the first numeric col
     if "Close" in df.columns:
         return df["Close"]
@@ -442,11 +462,16 @@ with st.spinner("Loading fund data..."):
 
 
 def pick_oldest(cat: str) -> str:
+    """Return the fund in `cat` with the earliest inception. Defensive against
+    funds where first_valid_index() returns something other than a Timestamp."""
     funds = catalogue[cat]
-    best, best_d = funds[0], nav[(cat, funds[0])].first_valid_index() or pd.Timestamp.max
+    best = funds[0]
+    best_d = nav[(cat, best)].first_valid_index()
+    if not isinstance(best_d, pd.Timestamp):
+        best_d = pd.Timestamp.max
     for f in funds[1:]:
         d = nav[(cat, f)].first_valid_index()
-        if d is not None and d < best_d:
+        if isinstance(d, pd.Timestamp) and d < best_d:
             best, best_d = f, d
     return best
 
