@@ -492,47 +492,6 @@ if "selections" not in st.session_state:
 st.markdown('<div class="section-label">Your portfolio</div>', unsafe_allow_html=True)
 
 
-def rebalance_weights(changed_idx: int):
-    """When weight at `changed_idx` changes, proportionally adjust the others
-    so the total stays at 100%."""
-    sels = st.session_state.selections
-    new_val = st.session_state[f"w_{changed_idx}"]
-    sels[changed_idx]["weight"] = new_val
-
-    if len(sels) <= 1:
-        # Only one fund — clamp to 100
-        sels[0]["weight"] = 100.0
-        st.session_state[f"w_0"] = 100.0
-        return
-
-    remaining = 100.0 - new_val
-    if remaining < 0:
-        # User went over 100 — just leave the changed value, zero out others
-        for i, r in enumerate(sels):
-            if i != changed_idx:
-                r["weight"] = 0.0
-                st.session_state[f"w_{i}"] = 0.0
-        return
-
-    # Distribute `remaining` across other funds, proportional to their CURRENT weights
-    other_total = sum(r["weight"] for i, r in enumerate(sels) if i != changed_idx)
-    if other_total > 0:
-        # Scale proportionally
-        for i, r in enumerate(sels):
-            if i != changed_idx:
-                new_w = round(r["weight"] * remaining / other_total, 2)
-                r["weight"] = new_w
-                st.session_state[f"w_{i}"] = new_w
-    else:
-        # All other weights are 0 — split `remaining` equally
-        n_others = len(sels) - 1
-        equal_share = round(remaining / n_others, 2)
-        for i, r in enumerate(sels):
-            if i != changed_idx:
-                r["weight"] = equal_share
-                st.session_state[f"w_{i}"] = equal_share
-
-
 to_delete = None
 for i, row in enumerate(st.session_state.selections):
     with st.container(border=True):
@@ -544,11 +503,10 @@ for i, row in enumerate(st.session_state.selections):
                 key=f"fund_{i}", label_visibility="collapsed",
             )
         with c2:
-            st.number_input(
+            row["weight"] = st.number_input(
                 "Weight", min_value=0.0, max_value=100.0,
                 value=float(row["weight"]), step=5.0,
                 key=f"w_{i}", label_visibility="collapsed",
-                on_change=rebalance_weights, args=(i,),
             )
         with c3:
             st.markdown('<div style="padding-top:4px"></div>', unsafe_allow_html=True)
@@ -557,36 +515,17 @@ for i, row in enumerate(st.session_state.selections):
 
 if to_delete is not None:
     st.session_state.selections.pop(to_delete)
-    # Clear stale widget state for removed/shifted rows
+    # Clear widget state for removed/shifted rows
     for k in list(st.session_state.keys()):
         if k.startswith("w_") or k.startswith("fund_") or k.startswith("del_"):
             del st.session_state[k]
-    # Re-normalize remaining weights to sum to 100
-    sels = st.session_state.selections
-    if sels:
-        total_now = sum(r["weight"] for r in sels)
-        if total_now > 0:
-            for r in sels:
-                r["weight"] = round(r["weight"] * 100.0 / total_now, 2)
-        else:
-            equal = round(100.0 / len(sels), 2)
-            for r in sels:
-                r["weight"] = equal
     st.rerun()
 
 col_a, col_b, col_c = st.columns([1, 1, 2])
 with col_a:
     if st.button("＋ Add fund", use_container_width=True):
+        # Add a new fund with 0% weight — user sets it themselves
         st.session_state.selections.append({"fund": ALL_FUNDS[0], "weight": 0.0})
-        # Auto-rebalance: split 100% equally across all funds (including the new one)
-        n = len(st.session_state.selections)
-        equal = round(100.0 / n, 2)
-        # Clear widget state so the new defaults take effect
-        for k in list(st.session_state.keys()):
-            if k.startswith("w_"):
-                del st.session_state[k]
-        for r in st.session_state.selections:
-            r["weight"] = equal
         st.rerun()
 with col_b:
     if st.button("⚖ Equal weights", use_container_width=True):
@@ -601,10 +540,10 @@ with col_b:
         st.rerun()
 with col_c:
     total = sum(r["weight"] for r in st.session_state.selections)
-    color = "#10b981" if abs(total - 100) < 0.5 else "#ef4444"
+    color = "#10b981" if abs(total - 100) < 0.01 else "#ef4444"
     st.markdown(
         f'<div style="text-align:right; padding-top:8px; color:{color}; '
-        f'font-weight:600;">Total: {total:.0f}%</div>',
+        f'font-weight:600;">Total: {total:.1f}%</div>',
         unsafe_allow_html=True,
     )
 
@@ -613,20 +552,39 @@ with col_c:
 # Build selections + early exits
 # =============================================================================
 selections = [(r["fund"], r["weight"]) for r in st.session_state.selections if r["weight"] > 0]
+
+# Check if total is exactly 100% — if not, show a clean message and stop
+if abs(total - 100) > 0.01:
+    diff = 100 - total
+    direction = "add" if diff > 0 else "remove"
+    st.markdown(
+        f'<div class="card" style="text-align:center; margin-top:1.5rem;">'
+        f'  <div style="font-size:1.4rem; font-weight:700; margin-bottom:0.5rem;">'
+        f'    Set weights to exactly 100% to see results'
+        f'  </div>'
+        f'  <div style="opacity:0.65; font-size:0.95rem;">'
+        f'    Your weights sum to <b>{total:.1f}%</b>. '
+        f'    {"You need to <b>" + direction + f" {abs(diff):.1f}%</b>." if total > 0 else ""}'
+        f'  </div>'
+        f'  <div style="opacity:0.5; font-size:0.85rem; margin-top:0.75rem;">'
+        f'    Tip: hit <b>⚖ Equal weights</b> to split 100% evenly across your funds.'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
 if not selections:
     st.info("Add at least one fund with a non-zero weight to see results.")
     st.stop()
 
-if abs(total - 100) > 0.01:
-    st.warning(f"Weights sum to {total:.0f}%, not 100%. Showing proportional weights.")
-
 
 # =============================================================================
-# View selector
+# View selector — 4 tabs (Performance combines Growth Chart + Rolling Returns)
 # =============================================================================
 st.markdown('<div class="section-label">What do you want to see?</div>', unsafe_allow_html=True)
 
-views_all = ["📈 Rolling Returns", "📊 Growth Chart", "🥧 Market Cap", "🏭 Sectors", "🏢 Top Stocks"]
+views_all = ["📈 Performance", "🥧 Market Cap", "🏭 Sectors", "🏢 Top Stocks"]
 disabled_reasons = {}
 if stock_df.empty:
     disabled_reasons["🥧 Market Cap"] = STOCKS_FILE
@@ -670,15 +628,17 @@ def column_html(name, dot_class, stats):
 
 
 # =============================================================================
-# VIEW 1: Rolling Returns
+# Rolling-returns metrics (rendered inline inside Performance view on demand)
 # =============================================================================
-def render_rolling_returns():
+def render_rolling_returns_metrics():
+    """Render just the 1Y/3Y/5Y rolling return cards. No date/investment inputs.
+    Uses the full available portfolio history (not the user's date range)."""
     portfolio = build_portfolio(nav, selections)
     if portfolio.empty or len(portfolio) < 252:
-        st.error("Not enough overlapping data for these funds.")
+        st.error("Not enough overlapping data for rolling returns (need 1+ year).")
         return
 
-    # Identify the youngest fund (limits the backtest window)
+    # Warn if backtest window is too short for 3Y/5Y
     fund_inceptions = [(f, fund_info[f].get("inception")) for f, _ in selections]
     valid = [(f, d) for f, d in fund_inceptions if isinstance(d, pd.Timestamp)]
     if valid:
@@ -686,9 +646,8 @@ def render_rolling_returns():
         backtest_years = (portfolio.index[-1] - portfolio.index[0]).days / 365.25
         if backtest_years < 5:
             st.info(
-                f"⚠️ Your backtest is limited to **{backtest_years:.1f} years** because "
-                f"**{youngest[0]}** only has data since **{youngest[1].strftime('%b %Y')}**. "
-                f"Swap it for an older fund to unlock 3Y / 5Y rolling returns."
+                f"⚠️ Rolling-return backtest limited to **{backtest_years:.1f} years** because "
+                f"**{youngest[0]}** only has data since **{youngest[1].strftime('%b %Y')}**."
             )
 
     bench = benchmark.loc[portfolio.index[0]:portfolio.index[-1]].reindex(portfolio.index).ffill()
@@ -697,8 +656,8 @@ def render_rolling_returns():
     period_start = portfolio.index[0].strftime("%b %Y")
     period_end   = portfolio.index[-1].strftime("%b %Y")
     st.markdown(
-        f'<div style="opacity:0.55; font-size:0.85rem; margin-bottom:1rem;">'
-        f'Based on data from {period_start} to {period_end}</div>',
+        f'<div style="opacity:0.55; font-size:0.85rem; margin: 0.5rem 0 1rem 0;">'
+        f'Based on full history from {period_start} to {period_end}</div>',
         unsafe_allow_html=True,
     )
 
@@ -756,9 +715,9 @@ def render_rolling_returns():
 
 
 # =============================================================================
-# VIEW 2: Growth Chart
+# VIEW: Performance (Growth Chart + optional Rolling Returns toggle)
 # =============================================================================
-def render_growth_chart():
+def render_performance():
     # Find earliest valid date across selected funds
     funds_in_portfolio = [f for f, _ in selections]
     inceptions = [fund_info[f].get("inception") for f in funds_in_portfolio]
@@ -766,7 +725,7 @@ def render_growth_chart():
     if not inceptions:
         st.error("Selected funds have no valid history.")
         return
-    earliest = max(inceptions)  # latest start = earliest *common* date
+    earliest = max(inceptions)
     latest = nav.index.max()
 
     # Date range pickers
@@ -792,29 +751,24 @@ def render_growth_chart():
     start_ts = pd.Timestamp(start)
     end_ts = pd.Timestamp(end)
 
-    # Investment amount
     invest = st.number_input(
         "Investment amount (₹)", min_value=1000.0, value=100000.0, step=10000.0,
         key="growth_invest",
     )
 
-    # Build portfolio
     portfolio = build_portfolio(nav, selections, start_ts, end_ts)
     if portfolio.empty:
         st.error("No overlapping data in selected date range.")
         return
 
-    # Align benchmark to portfolio's index, then normalize from start of period
     bench = benchmark.loc[portfolio.index[0]:portfolio.index[-1]].reindex(portfolio.index).ffill()
     bench_normalized = bench / bench.iloc[0]
 
-    # Build the chart dataframe (₹ values, not multiples)
     chart_df = pd.DataFrame({
         "Your Portfolio": portfolio.values * invest,
         "Nifty 500":      bench_normalized.values * invest,
     }, index=portfolio.index)
 
-    # Return numbers for the cards at top
     p_final = portfolio.iloc[-1] * invest
     b_final = bench_normalized.iloc[-1] * invest
     p_return = (portfolio.iloc[-1] - 1) * 100
@@ -845,7 +799,7 @@ def render_growth_chart():
         unsafe_allow_html=True,
     )
 
-    # Build clean Altair chart (no metadata table, full control over styling)
+    # Altair chart
     import altair as alt
     chart_long = chart_df.reset_index().melt(
         id_vars="Date", var_name="Series", value_name="Value"
@@ -884,6 +838,24 @@ def render_growth_chart():
         f'({years:.1f} years)</div>',
         unsafe_allow_html=True,
     )
+
+    # Rolling-returns toggle (button)
+    st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
+
+    if "show_rr" not in st.session_state:
+        st.session_state.show_rr = False
+
+    label = "📊 Hide rolling returns" if st.session_state.show_rr else "📊 Show rolling returns (1Y · 3Y · 5Y)"
+    if st.button(label, use_container_width=True, key="toggle_rr"):
+        st.session_state.show_rr = not st.session_state.show_rr
+        st.rerun()
+
+    if st.session_state.show_rr:
+        st.markdown(
+            '<div class="section-label" style="margin-top:1.5rem;">Rolling returns vs Nifty 500</div>',
+            unsafe_allow_html=True,
+        )
+        render_rolling_returns_metrics()
 
 
 # =============================================================================
@@ -1127,10 +1099,8 @@ def render_top_stocks():
 # =============================================================================
 # Route to the chosen view
 # =============================================================================
-if view.endswith("Rolling Returns"):
-    render_rolling_returns()
-elif view.endswith("Growth Chart"):
-    render_growth_chart()
+if view.endswith("Performance"):
+    render_performance()
 elif view.endswith("Market Cap"):
     render_market_cap()
 elif view.endswith("Sectors"):
