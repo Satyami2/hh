@@ -264,6 +264,7 @@ NAV_FILES = {
     "sidefunds3.parquet": "Other",
     "sidefunds4.parquet": "Other",
     "sidefunds5.parquet": "Other",
+    "goldetf.parquet":    "Gold ETF",
 }
 
 BENCHMARK_FILE = "nifty500.parquet"
@@ -490,6 +491,48 @@ if "selections" not in st.session_state:
 
 st.markdown('<div class="section-label">Your portfolio</div>', unsafe_allow_html=True)
 
+
+def rebalance_weights(changed_idx: int):
+    """When weight at `changed_idx` changes, proportionally adjust the others
+    so the total stays at 100%."""
+    sels = st.session_state.selections
+    new_val = st.session_state[f"w_{changed_idx}"]
+    sels[changed_idx]["weight"] = new_val
+
+    if len(sels) <= 1:
+        # Only one fund — clamp to 100
+        sels[0]["weight"] = 100.0
+        st.session_state[f"w_0"] = 100.0
+        return
+
+    remaining = 100.0 - new_val
+    if remaining < 0:
+        # User went over 100 — just leave the changed value, zero out others
+        for i, r in enumerate(sels):
+            if i != changed_idx:
+                r["weight"] = 0.0
+                st.session_state[f"w_{i}"] = 0.0
+        return
+
+    # Distribute `remaining` across other funds, proportional to their CURRENT weights
+    other_total = sum(r["weight"] for i, r in enumerate(sels) if i != changed_idx)
+    if other_total > 0:
+        # Scale proportionally
+        for i, r in enumerate(sels):
+            if i != changed_idx:
+                new_w = round(r["weight"] * remaining / other_total, 2)
+                r["weight"] = new_w
+                st.session_state[f"w_{i}"] = new_w
+    else:
+        # All other weights are 0 — split `remaining` equally
+        n_others = len(sels) - 1
+        equal_share = round(remaining / n_others, 2)
+        for i, r in enumerate(sels):
+            if i != changed_idx:
+                r["weight"] = equal_share
+                st.session_state[f"w_{i}"] = equal_share
+
+
 to_delete = None
 for i, row in enumerate(st.session_state.selections):
     with st.container(border=True):
@@ -501,10 +544,11 @@ for i, row in enumerate(st.session_state.selections):
                 key=f"fund_{i}", label_visibility="collapsed",
             )
         with c2:
-            row["weight"] = st.number_input(
+            st.number_input(
                 "Weight", min_value=0.0, max_value=100.0,
                 value=float(row["weight"]), step=5.0,
                 key=f"w_{i}", label_visibility="collapsed",
+                on_change=rebalance_weights, args=(i,),
             )
         with c3:
             st.markdown('<div style="padding-top:4px"></div>', unsafe_allow_html=True)
@@ -513,23 +557,51 @@ for i, row in enumerate(st.session_state.selections):
 
 if to_delete is not None:
     st.session_state.selections.pop(to_delete)
+    # Clear stale widget state for removed/shifted rows
+    for k in list(st.session_state.keys()):
+        if k.startswith("w_") or k.startswith("fund_") or k.startswith("del_"):
+            del st.session_state[k]
+    # Re-normalize remaining weights to sum to 100
+    sels = st.session_state.selections
+    if sels:
+        total_now = sum(r["weight"] for r in sels)
+        if total_now > 0:
+            for r in sels:
+                r["weight"] = round(r["weight"] * 100.0 / total_now, 2)
+        else:
+            equal = round(100.0 / len(sels), 2)
+            for r in sels:
+                r["weight"] = equal
     st.rerun()
 
 col_a, col_b, col_c = st.columns([1, 1, 2])
 with col_a:
     if st.button("＋ Add fund", use_container_width=True):
         st.session_state.selections.append({"fund": ALL_FUNDS[0], "weight": 0.0})
+        # Auto-rebalance: split 100% equally across all funds (including the new one)
+        n = len(st.session_state.selections)
+        equal = round(100.0 / n, 2)
+        # Clear widget state so the new defaults take effect
+        for k in list(st.session_state.keys()):
+            if k.startswith("w_"):
+                del st.session_state[k]
+        for r in st.session_state.selections:
+            r["weight"] = equal
         st.rerun()
 with col_b:
     if st.button("⚖ Equal weights", use_container_width=True):
         n = len(st.session_state.selections)
         if n:
+            equal = round(100.0 / n, 2)
+            for k in list(st.session_state.keys()):
+                if k.startswith("w_"):
+                    del st.session_state[k]
             for r in st.session_state.selections:
-                r["weight"] = round(100.0 / n, 2)
+                r["weight"] = equal
         st.rerun()
 with col_c:
     total = sum(r["weight"] for r in st.session_state.selections)
-    color = "#10b981" if abs(total - 100) < 0.01 else "#ef4444"
+    color = "#10b981" if abs(total - 100) < 0.5 else "#ef4444"
     st.markdown(
         f'<div style="text-align:right; padding-top:8px; color:{color}; '
         f'font-weight:600;">Total: {total:.0f}%</div>',
@@ -773,13 +845,37 @@ def render_growth_chart():
         unsafe_allow_html=True,
     )
 
-    # Line chart
-    st.line_chart(
-        chart_df,
-        color=["#3b82f6", "#9ca3af"],
-        height=400,
-        use_container_width=True,
+    # Build clean Altair chart (no metadata table, full control over styling)
+    import altair as alt
+    chart_long = chart_df.reset_index().melt(
+        id_vars="Date", var_name="Series", value_name="Value"
     )
+    chart = (
+        alt.Chart(chart_long)
+        .mark_line(strokeWidth=2)
+        .encode(
+            x=alt.X("Date:T", title=None, axis=alt.Axis(grid=False)),
+            y=alt.Y("Value:Q", title=None,
+                    axis=alt.Axis(format="~s", grid=True, gridOpacity=0.15)),
+            color=alt.Color(
+                "Series:N",
+                scale=alt.Scale(
+                    domain=["Your Portfolio", "Nifty 500"],
+                    range=["#3b82f6", "#9ca3af"],
+                ),
+                legend=alt.Legend(title=None, orient="top-left"),
+            ),
+            tooltip=[
+                alt.Tooltip("Date:T", title="Date"),
+                alt.Tooltip("Series:N", title="Series"),
+                alt.Tooltip("Value:Q", title="Value", format=",.0f"),
+            ],
+        )
+        .properties(height=400)
+        .configure_view(strokeWidth=0)
+        .configure_axis(labelOpacity=0.7, tickOpacity=0.4, domainOpacity=0.2)
+    )
+    st.altair_chart(chart, use_container_width=True)
 
     st.markdown(
         f'<div style="opacity:0.55; font-size:0.8rem; text-align:center; margin-top:0.5rem;">'
