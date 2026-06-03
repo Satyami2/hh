@@ -107,14 +107,15 @@ st.markdown("""
     .dot.small      {background: #ec4899;}
     .dot.cash       {background: #9ca3af;}
 
-    .compare-stats {display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem;}
+    .compare-stats {display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem;}
     .compare-stat-label {
-        font-size: 0.65rem; font-weight: 600;
-        text-transform: uppercase; letter-spacing: 0.06em;
+        font-size: 0.6rem; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.05em;
         opacity: 0.55; margin-bottom: 0.2rem;
+        white-space: nowrap;
     }
     .compare-stat-value {
-        font-size: 1.25rem; font-weight: 700;
+        font-size: 1.1rem; font-weight: 700;
         letter-spacing: -0.02em; line-height: 1.1;
     }
 
@@ -418,6 +419,15 @@ def rolling_cagr(series: pd.Series, window_days: int) -> pd.Series:
     return ((series / series.shift(window_days)) ** (1 / years) - 1).dropna()
 
 
+def max_drawdown(series: pd.Series) -> float:
+    """Return the worst peak-to-trough drawdown as a negative number (e.g. -0.42 = -42%)."""
+    if series.empty:
+        return 0.0
+    running_max = series.cummax()
+    drawdown = (series - running_max) / running_max
+    return drawdown.min()
+
+
 def classify_cap(stock: str, amfi_map: dict) -> str:
     return amfi_map.get(_normalize_stock(stock), "Small Cap")
 
@@ -631,37 +641,61 @@ def column_html(name, dot_class, stats):
 # Rolling-returns metrics (rendered inline inside Performance view on demand)
 # =============================================================================
 def render_rolling_returns_metrics():
-    """Render just the 1Y/3Y/5Y rolling return cards. No date/investment inputs.
+    """Render 1Y/3Y/5Y rolling return cards plus Max Drawdown comparison.
     Uses the full available portfolio history (not the user's date range)."""
     portfolio = build_portfolio(nav, selections)
-    if portfolio.empty or len(portfolio) < 252:
-        st.error("Not enough overlapping data for rolling returns (need 1+ year).")
+    if portfolio.empty:
+        st.error("No overlapping data for the selected funds.")
         return
 
-    # Warn if backtest window is too short for 3Y/5Y
-    fund_inceptions = [(f, fund_info[f].get("inception")) for f, _ in selections]
-    valid = [(f, d) for f, d in fund_inceptions if isinstance(d, pd.Timestamp)]
-    if valid:
-        youngest = max(valid, key=lambda x: x[1])
-        backtest_years = (portfolio.index[-1] - portfolio.index[0]).days / 365.25
-        if backtest_years < 5:
-            st.info(
-                f"⚠️ Rolling-return backtest limited to **{backtest_years:.1f} years** because "
-                f"**{youngest[0]}** only has data since **{youngest[1].strftime('%b %Y')}**."
-            )
-
     bench = benchmark.loc[portfolio.index[0]:portfolio.index[-1]].reindex(portfolio.index).ffill()
+    backtest_years = (portfolio.index[-1] - portfolio.index[0]).days / 365.25
 
-    windows = [("1-Year Returns", 252), ("3-Year Returns", 252 * 3), ("5-Year Returns", 252 * 5)]
     period_start = portfolio.index[0].strftime("%b %Y")
     period_end   = portfolio.index[-1].strftime("%b %Y")
     st.markdown(
         f'<div style="opacity:0.55; font-size:0.85rem; margin: 0.5rem 0 1rem 0;">'
-        f'Based on full history from {period_start} to {period_end}</div>',
+        f'Based on {backtest_years:.1f} years of history ({period_start} to {period_end})'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
-    for title, days in windows:
+    windows = [
+        ("1-Year Returns", 252,     1),
+        ("3-Year Returns", 252 * 3, 3),
+        ("5-Year Returns", 252 * 5, 5),
+    ]
+
+    for title, days, years_needed in windows:
+        # Check we have enough history
+        if backtest_years < years_needed:
+            # Identify the limiting fund
+            fund_inceptions = [(f, fund_info[f].get("inception")) for f, _ in selections]
+            valid = [(f, d) for f, d in fund_inceptions if isinstance(d, pd.Timestamp)]
+            if valid:
+                youngest = max(valid, key=lambda x: x[1])
+                limiter_msg = (
+                    f"<b>{youngest[0]}</b> only has data since "
+                    f"<b>{youngest[1].strftime('%b %Y')}</b>. Swap it for an older fund."
+                )
+            else:
+                limiter_msg = "Pick funds with longer history."
+
+            st.markdown(
+                f'<div class="card">'
+                f'  <div class="card-header">'
+                f'    <div class="card-title">{title}</div>'
+                f'    <div class="card-meta">Not enough data</div>'
+                f'  </div>'
+                f'  <div style="opacity:0.75; font-size:0.9rem;">'
+                f'    Need at least {years_needed} years of overlapping data; '
+                f'    you have {backtest_years:.1f} years. {limiter_msg}'
+                f'  </div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            continue
+
         rr_p = rolling_cagr(portfolio, days)
         rr_b = rolling_cagr(bench, days)
         if rr_p.empty:
@@ -669,28 +703,31 @@ def render_rolling_returns_metrics():
                 f'<div class="card">'
                 f'<div class="card-header">'
                 f'<div class="card-title">{title}</div>'
-                f'<div class="card-meta">Not enough history</div>'
-                f'</div>'
-                f'<div style="opacity:0.7; font-size:0.9rem;">'
-                f'Need at least {days // 252} years of overlapping data.'
+                f'<div class="card-meta">Not enough data</div>'
                 f'</div></div>',
                 unsafe_allow_html=True,
             )
             continue
 
+        # Compute stats for the rolling window
         pmn, pmd, pmx = rr_p.min(), rr_p.median(), rr_p.max()
         bmn, bmd, bmx = rr_b.min(), rr_b.median(), rr_b.max()
-        pos_pct = (rr_p > 0).mean() * 100
+
+        # Max drawdown over the same window — what's the worst N-year drawdown experienced?
+        p_dd = max_drawdown(portfolio)
+        b_dd = max_drawdown(bench)
 
         portfolio_col = column_html("Your Portfolio", "portfolio", [
             ("Min", f"{pmn*100:.1f}%", color_for(pmn)),
             ("Median", f"{pmd*100:.1f}%", color_for(pmd)),
             ("Max", f"{pmx*100:.1f}%", color_for(pmx)),
+            ("Max DD", f"{p_dd*100:.1f}%", "neg"),
         ])
         benchmark_col = column_html("Nifty 500", "benchmark", [
             ("Min", f"{bmn*100:.1f}%", color_for(bmn)),
             ("Median", f"{bmd*100:.1f}%", color_for(bmd)),
             ("Max", f"{bmx*100:.1f}%", color_for(bmx)),
+            ("Max DD", f"{b_dd*100:.1f}%", "neg"),
         ])
 
         diff = pmd - bmd
@@ -705,7 +742,6 @@ def render_rolling_returns_metrics():
             f'<div class="card">'
             f'  <div class="card-header">'
             f'    <div class="card-title">{title}</div>'
-            f'    <div class="card-meta">{len(rr_p):,} windows · portfolio positive in {pos_pct:.0f}%</div>'
             f'  </div>'
             f'  <div class="compare-grid">{portfolio_col}{benchmark_col}</div>'
             f'  <div class="verdict {v_cls}">{v_txt}</div>'
