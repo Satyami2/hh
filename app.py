@@ -531,24 +531,13 @@ if to_delete is not None:
             del st.session_state[k]
     st.rerun()
 
-col_a, col_b, col_c = st.columns([1, 1, 2])
+col_a, col_b = st.columns([1, 3])
 with col_a:
     if st.button("＋ Add fund", use_container_width=True):
         # Add a new fund with 0% weight — user sets it themselves
         st.session_state.selections.append({"fund": ALL_FUNDS[0], "weight": 0.0})
         st.rerun()
 with col_b:
-    if st.button("⚖ Equal weights", use_container_width=True):
-        n = len(st.session_state.selections)
-        if n:
-            equal = round(100.0 / n, 2)
-            for k in list(st.session_state.keys()):
-                if k.startswith("w_"):
-                    del st.session_state[k]
-            for r in st.session_state.selections:
-                r["weight"] = equal
-        st.rerun()
-with col_c:
     total = sum(r["weight"] for r in st.session_state.selections)
     color = "#10b981" if abs(total - 100) < 0.01 else "#ef4444"
     st.markdown(
@@ -575,9 +564,6 @@ if abs(total - 100) > 0.01:
         f'  <div style="opacity:0.65; font-size:0.95rem;">'
         f'    Your weights sum to <b>{total:.1f}%</b>. '
         f'    {"You need to <b>" + direction + f" {abs(diff):.1f}%</b>." if total > 0 else ""}'
-        f'  </div>'
-        f'  <div style="opacity:0.5; font-size:0.85rem; margin-top:0.75rem;">'
-        f'    Tip: hit <b>⚖ Equal weights</b> to split 100% evenly across your funds.'
         f'  </div>'
         f'</div>',
         unsafe_allow_html=True,
