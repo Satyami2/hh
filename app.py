@@ -626,25 +626,22 @@ def column_html(name, dot_class, stats):
 # =============================================================================
 # Rolling-returns metrics (rendered inline inside Performance view on demand)
 # =============================================================================
-def render_rolling_returns_metrics():
+def render_rolling_returns_metrics(start_ts: pd.Timestamp = None, end_ts: pd.Timestamp = None):
     """Render 1Y/3Y/5Y rolling return cards plus Max Drawdown comparison.
-    Uses the full available portfolio history (not the user's date range)."""
-    portfolio = build_portfolio(nav, selections)
+    Respects the selected date range (if provided)."""
+    portfolio = build_portfolio(nav, selections, start_ts, end_ts)
     if portfolio.empty:
-        st.error("No overlapping data for the selected funds.")
+        st.error("No overlapping data for the selected funds in this date range.")
         return
 
-    bench = benchmark.reindex(portfolio.index, method="ffill")
-    # If the very first date is still NaN (portfolio starts before any benchmark data),
-    # bfill the head from the next available value
-    bench = bench.bfill()
+    bench = benchmark.reindex(portfolio.index, method="ffill").bfill()
     backtest_years = (portfolio.index[-1] - portfolio.index[0]).days / 365.25
 
     period_start = portfolio.index[0].strftime("%b %Y")
     period_end   = portfolio.index[-1].strftime("%b %Y")
     st.markdown(
         f'<div style="opacity:0.55; font-size:0.85rem; margin: 0.5rem 0 1rem 0;">'
-        f'Based on {backtest_years:.1f} years of history ({period_start} to {period_end})'
+        f'Based on {backtest_years:.1f} years of selected history ({period_start} to {period_end})'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -883,7 +880,7 @@ def render_performance():
             '<div class="section-label" style="margin-top:1.5rem;">Rolling returns vs Nifty 500</div>',
             unsafe_allow_html=True,
         )
-        render_rolling_returns_metrics()
+        render_rolling_returns_metrics(start_ts, end_ts)
 
 
 # =============================================================================
@@ -1135,14 +1132,3 @@ elif view.endswith("Sectors"):
     render_sectors()
 elif view.endswith("Top Stocks"):
     render_top_stocks()
-
-
-# =============================================================================
-# Footer
-# =============================================================================
-st.markdown(
-    '<div style="text-align:center; opacity:0.4; font-size:0.75rem; margin-top:2.5rem;">'
-    'Past performance is not indicative of future results.'
-    '</div>',
-    unsafe_allow_html=True,
-)
