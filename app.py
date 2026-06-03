@@ -576,25 +576,11 @@ if not selections:
 
 
 # =============================================================================
-# View selector — 4 tabs (Performance combines Growth Chart + Rolling Returns)
+# View routing — only Performance for now.
+# Market Cap / Sectors / Top Stocks render functions are still defined below
+# if you want to re-enable them later.
 # =============================================================================
-st.markdown('<div class="section-label">What do you want to see?</div>', unsafe_allow_html=True)
-
-views_all = ["📈 Performance", "🥧 Market Cap", "🏭 Sectors", "🏢 Top Stocks"]
-disabled_reasons = {}
-if stock_df.empty:
-    disabled_reasons["🥧 Market Cap"] = STOCKS_FILE
-    disabled_reasons["🏢 Top Stocks"] = STOCKS_FILE
-if sector_df.empty:
-    disabled_reasons["🏭 Sectors"] = SECTOR_FILE
-views_available = [v for v in views_all if v not in disabled_reasons]
-
-if missing_files:
-    files_str = ", ".join(f"`{f}`" for f in missing_files)
-    st.info(f"ℹ️ Some holdings views are disabled. Missing files: {files_str}")
-
-view = st.radio("View", views_available, horizontal=True, label_visibility="collapsed")
-st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+view = "📈 Performance"
 
 
 # =============================================================================
