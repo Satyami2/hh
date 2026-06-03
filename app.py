@@ -634,7 +634,10 @@ def render_rolling_returns_metrics():
         st.error("No overlapping data for the selected funds.")
         return
 
-    bench = benchmark.loc[portfolio.index[0]:portfolio.index[-1]].reindex(portfolio.index).ffill()
+    bench = benchmark.reindex(portfolio.index, method="ffill")
+    # If the very first date is still NaN (portfolio starts before any benchmark data),
+    # bfill the head from the next available value
+    bench = bench.bfill()
     backtest_years = (portfolio.index[-1] - portfolio.index[0]).days / 365.25
 
     period_start = portfolio.index[0].strftime("%b %Y")
@@ -783,7 +786,10 @@ def render_performance():
         st.error("No overlapping data in selected date range.")
         return
 
-    bench = benchmark.loc[portfolio.index[0]:portfolio.index[-1]].reindex(portfolio.index).ffill()
+    # Align benchmark to portfolio index. Use method="ffill" so dates not in
+    # the benchmark (e.g., weekends present in the ffill'd NAV) get the prior
+    # trading day's value. bfill handles any leading NaN.
+    bench = benchmark.reindex(portfolio.index, method="ffill").bfill()
     bench_normalized = bench / bench.iloc[0]
 
     chart_df = pd.DataFrame({
